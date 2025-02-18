@@ -1,186 +1,231 @@
-use crate::{
-    entities::{
-        app::{App, AppId, CreateAppParams, UpdateAppParams},
-        trash::{RepeatedTrash, RepeatedTrashId},
-        view::{CreateViewParams, RepeatedViewId, UpdateViewParams, View, ViewId},
-        workspace::{CreateWorkspaceParams, RepeatedWorkspace, UpdateWorkspaceParams, Workspace, WorkspaceId},
-    },
-    errors::FlowyError,
-    manager::FolderManager,
-    services::{app::event_handler::*, trash::event_handler::*, view::event_handler::*, workspace::event_handler::*},
-};
-use flowy_database::{ConnectionPool, DBConnection};
-use flowy_derive::{Flowy_Event, ProtoBuf_Enum};
-use lib_dispatch::prelude::*;
-use lib_infra::future::FutureResult;
-use std::sync::Arc;
+use std::sync::Weak;
+
 use strum_macros::Display;
 
-pub trait WorkspaceDeps: WorkspaceUser + WorkspaceDatabase {}
+use flowy_derive::{Flowy_Event, ProtoBuf_Enum};
+use lib_dispatch::prelude::*;
 
-pub trait WorkspaceUser: Send + Sync {
-    fn user_id(&self) -> Result<String, FlowyError>;
-    fn token(&self) -> Result<String, FlowyError>;
-}
+use crate::event_handler::*;
+use crate::manager::FolderManager;
 
-pub trait WorkspaceDatabase: Send + Sync {
-    fn db_pool(&self) -> Result<Arc<ConnectionPool>, FlowyError>;
-
-    fn db_connection(&self) -> Result<DBConnection, FlowyError> {
-        let pool = self.db_pool()?;
-        let conn = pool.get().map_err(|e| FlowyError::internal().context(e))?;
-        Ok(conn)
-    }
-}
-
-pub fn create(folder: Arc<FolderManager>) -> Module {
-    let mut module = Module::new()
-        .name("Flowy-Workspace")
-        .data(folder.workspace_controller.clone())
-        .data(folder.app_controller.clone())
-        .data(folder.view_controller.clone())
-        .data(folder.trash_controller.clone())
-        .data(folder.clone());
-
-    module = module
-        .event(FolderEvent::CreateWorkspace, create_workspace_handler)
-        .event(FolderEvent::ReadCurWorkspace, read_cur_workspace_handler)
-        .event(FolderEvent::ReadWorkspaces, read_workspaces_handler)
-        .event(FolderEvent::OpenWorkspace, open_workspace_handler)
-        .event(FolderEvent::ReadWorkspaceApps, read_workspace_apps_handler);
-
-    module = module
-        .event(FolderEvent::CreateApp, create_app_handler)
-        .event(FolderEvent::ReadApp, read_app_handler)
-        .event(FolderEvent::UpdateApp, update_app_handler)
-        .event(FolderEvent::DeleteApp, delete_app_handler);
-
-    module = module
-        .event(FolderEvent::CreateView, create_view_handler)
-        .event(FolderEvent::ReadView, read_view_handler)
-        .event(FolderEvent::UpdateView, update_view_handler)
-        .event(FolderEvent::DeleteView, delete_view_handler)
-        .event(FolderEvent::DuplicateView, duplicate_view_handler)
-        .event(FolderEvent::SetLatestView, set_latest_view_handler)
-        .event(FolderEvent::CloseView, close_view_handler);
-
-    module = module
-        .event(FolderEvent::ReadTrash, read_trash_handler)
-        .event(FolderEvent::PutbackTrash, putback_trash_handler)
-        .event(FolderEvent::DeleteTrash, delete_trash_handler)
-        .event(FolderEvent::RestoreAllTrash, restore_all_trash_handler)
-        .event(FolderEvent::DeleteAllTrash, delete_all_trash_handler);
-
-    module
+pub fn init(folder: Weak<FolderManager>) -> AFPlugin {
+  AFPlugin::new().name("Flowy-Folder").state(folder)
+    // Workspace
+    .event(FolderEvent::CreateFolderWorkspace, create_workspace_handler)
+    .event(FolderEvent::GetCurrentWorkspaceSetting, read_current_workspace_setting_handler)
+    .event(FolderEvent::ReadCurrentWorkspace, read_current_workspace_handler)
+    .event(FolderEvent::ReadWorkspaceViews, get_workspace_views_handler)
+    .event(FolderEvent::CreateView, create_view_handler)
+    .event(FolderEvent::CreateOrphanView, create_orphan_view_handler)
+    .event(FolderEvent::GetView, get_view_handler)
+    .event(FolderEvent::GetAllViews, get_all_views_handler)
+    .event(FolderEvent::UpdateView, update_view_handler)
+    .event(FolderEvent::DeleteView, delete_view_handler)
+    .event(FolderEvent::DuplicateView, duplicate_view_handler)
+    .event(FolderEvent::SetLatestView, set_latest_view_handler)
+    .event(FolderEvent::CloseView, close_view_handler)
+    .event(FolderEvent::MoveView, move_view_handler)
+    .event(FolderEvent::MoveNestedView, move_nested_view_handler)
+    .event(FolderEvent::ListTrashItems, read_trash_handler)
+    .event(FolderEvent::RestoreTrashItem, putback_trash_handler)
+    .event(FolderEvent::PermanentlyDeleteTrashItem, delete_trash_handler)
+    .event(FolderEvent::RecoverAllTrashItems, restore_all_trash_handler)
+    .event(FolderEvent::PermanentlyDeleteAllTrashItem, delete_my_trash_handler)
+    .event(FolderEvent::ImportData, import_data_handler)
+    .event(FolderEvent::ImportZipFile, import_zip_file_handler)
+    .event(FolderEvent::GetFolderSnapshots, get_folder_snapshots_handler)
+    .event(FolderEvent::UpdateViewIcon, update_view_icon_handler)
+    .event(FolderEvent::ReadFavorites, read_favorites_handler)
+    .event(FolderEvent::ReadRecentViews, read_recent_views_handler)
+    .event(FolderEvent::ToggleFavorite, toggle_favorites_handler)
+    .event(FolderEvent::UpdateRecentViews, update_recent_views_handler)
+    .event(FolderEvent::ReadPrivateViews, read_private_views_handler)
+    .event(FolderEvent::ReadCurrentWorkspaceViews, get_current_workspace_views_handler)
+    .event(FolderEvent::UpdateViewVisibilityStatus, update_view_visibility_status_handler)
+    .event(FolderEvent::GetViewAncestors, get_view_ancestors_handler)
+    .event(FolderEvent::PublishView, publish_view_handler)
+    .event(FolderEvent::GetPublishInfo, get_publish_info_handler)
+    .event(FolderEvent::SetPublishName, set_publish_name_handler)
+    .event(FolderEvent::UnpublishViews, unpublish_views_handler)
+    .event(FolderEvent::SetPublishNamespace, set_publish_namespace_handler)
+    .event(FolderEvent::GetPublishNamespace, get_publish_namespace_handler)
+    .event(FolderEvent::ListPublishedViews, list_published_views_handler)
+    .event(FolderEvent::GetDefaultPublishInfo, get_default_publish_info_handler)
+    .event(FolderEvent::SetDefaultPublishView, set_default_publish_view_handler)
+    .event(FolderEvent::RemoveDefaultPublishView, remove_default_publish_view_handler)
+    .event(FolderEvent::LockView, lock_view_handler)
+    .event(FolderEvent::UnlockView, unlock_view_handler)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Display, Hash, ProtoBuf_Enum, Flowy_Event)]
 #[event_err = "FlowyError"]
 pub enum FolderEvent {
-    #[event(input = "CreateWorkspacePayload", output = "Workspace")]
-    CreateWorkspace = 0,
+  /// Create a new workspace
+  #[event(input = "CreateWorkspacePayloadPB", output = "WorkspacePB")]
+  CreateFolderWorkspace = 0,
 
-    #[event(output = "CurrentWorkspaceSetting")]
-    ReadCurWorkspace = 1,
+  /// Read the current opening workspace. Currently, we only support one workspace
+  #[event(output = "WorkspaceSettingPB")]
+  GetCurrentWorkspaceSetting = 1,
 
-    #[event(input = "WorkspaceId", output = "RepeatedWorkspace")]
-    ReadWorkspaces = 2,
+  /// Return a list of workspaces that the current user can access.
+  #[event(output = "WorkspacePB")]
+  ReadCurrentWorkspace = 2,
 
-    #[event(input = "WorkspaceId")]
-    DeleteWorkspace = 3,
+  /// Delete the workspace
+  #[event(input = "WorkspaceIdPB")]
+  DeleteWorkspace = 3,
 
-    #[event(input = "WorkspaceId", output = "Workspace")]
-    OpenWorkspace = 4,
+  /// Return a list of views of the specified workspace.
+  /// Only the first level of child views are included.
+  #[event(input = "GetWorkspaceViewPB", output = "RepeatedViewPB")]
+  ReadWorkspaceViews = 5,
 
-    #[event(input = "WorkspaceId", output = "RepeatedApp")]
-    ReadWorkspaceApps = 5,
+  /// Create a new view in the corresponding app
+  #[event(input = "CreateViewPayloadPB", output = "ViewPB")]
+  CreateView = 10,
 
-    #[event(input = "CreateAppPayload", output = "App")]
-    CreateApp = 101,
+  /// Return the view info
+  #[event(input = "ViewIdPB", output = "ViewPB")]
+  GetView = 11,
 
-    #[event(input = "AppId")]
-    DeleteApp = 102,
+  /// Update the view's properties including the name,description, etc.
+  #[event(input = "UpdateViewPayloadPB", output = "ViewPB")]
+  UpdateView = 12,
 
-    #[event(input = "AppId", output = "App")]
-    ReadApp = 103,
+  /// Move the view to the trash folder
+  #[event(input = "RepeatedViewIdPB")]
+  DeleteView = 13,
 
-    #[event(input = "UpdateAppPayload")]
-    UpdateApp = 104,
+  /// Duplicate the view
+  #[event(input = "DuplicateViewPayloadPB", output = "ViewPB")]
+  DuplicateView = 14,
 
-    #[event(input = "CreateViewPayload", output = "View")]
-    CreateView = 201,
+  /// Close and release the resources that are used by this view.
+  /// It should get called when the 'View' page get destroy
+  #[event(input = "ViewIdPB")]
+  CloseView = 15,
 
-    #[event(input = "ViewId", output = "View")]
-    ReadView = 202,
+  /// Create a new view in the corresponding app
+  #[event(input = "CreateOrphanViewPayloadPB", output = "ViewPB")]
+  CreateOrphanView = 16,
 
-    #[event(input = "UpdateViewPayload", output = "View")]
-    UpdateView = 203,
+  /// Return the view info
+  #[event(output = "RepeatedViewPB")]
+  GetAllViews = 17,
 
-    #[event(input = "RepeatedViewId")]
-    DeleteView = 204,
+  #[event()]
+  CopyLink = 20,
 
-    #[event(input = "ViewId")]
-    DuplicateView = 205,
+  /// Set the current visiting view
+  #[event(input = "ViewIdPB")]
+  SetLatestView = 21,
 
-    #[event()]
-    CopyLink = 206,
+  /// Move the view or app to another place
+  #[event(input = "MoveViewPayloadPB")]
+  MoveView = 22,
 
-    #[event(input = "ViewId")]
-    SetLatestView = 207,
+  /// Read the trash that was deleted by the user
+  #[event(output = "RepeatedTrashPB")]
+  ListTrashItems = 23,
 
-    #[event(input = "ViewId")]
-    CloseView = 208,
+  /// Put back the trash to the origin folder
+  #[event(input = "TrashIdPB")]
+  RestoreTrashItem = 24,
 
-    #[event(output = "RepeatedTrash")]
-    ReadTrash = 300,
+  /// Delete the trash from the disk
+  #[event(input = "RepeatedTrashIdPB")]
+  PermanentlyDeleteTrashItem = 25,
 
-    #[event(input = "TrashId")]
-    PutbackTrash = 301,
+  /// Put back all the trash to its original folder
+  #[event()]
+  RecoverAllTrashItems = 26,
 
-    #[event(input = "RepeatedTrashId")]
-    DeleteTrash = 302,
+  /// Delete all the trash from the disk
+  #[event()]
+  PermanentlyDeleteAllTrashItem = 27,
 
-    #[event()]
-    RestoreAllTrash = 303,
+  #[event(input = "ImportPayloadPB", output = "RepeatedViewPB")]
+  ImportData = 30,
 
-    #[event()]
-    DeleteAllTrash = 304,
-}
+  #[event(input = "WorkspaceIdPB", output = "RepeatedFolderSnapshotPB")]
+  GetFolderSnapshots = 31,
+  /// Moves a nested view to a new location in the hierarchy.
+  ///
+  /// This function takes the `view_id` of the view to be moved,
+  /// `new_parent_id` of the view under which the `view_id` should be moved,
+  /// and an optional `prev_view_id` to position the `view_id` right after
+  /// this specific view.
+  #[event(input = "MoveNestedViewPayloadPB")]
+  MoveNestedView = 32,
 
-pub trait FolderCouldServiceV1: Send + Sync {
-    fn init(&self);
+  #[event(output = "RepeatedFavoriteViewPB")]
+  ReadFavorites = 33,
 
-    // Workspace
-    fn create_workspace(&self, token: &str, params: CreateWorkspaceParams) -> FutureResult<Workspace, FlowyError>;
+  #[event(input = "RepeatedViewIdPB")]
+  ToggleFavorite = 34,
 
-    fn read_workspace(&self, token: &str, params: WorkspaceId) -> FutureResult<RepeatedWorkspace, FlowyError>;
+  #[event(input = "UpdateViewIconPayloadPB")]
+  UpdateViewIcon = 35,
 
-    fn update_workspace(&self, token: &str, params: UpdateWorkspaceParams) -> FutureResult<(), FlowyError>;
+  #[event(input = "ReadRecentViewsPB", output = "RepeatedRecentViewPB")]
+  ReadRecentViews = 36,
 
-    fn delete_workspace(&self, token: &str, params: WorkspaceId) -> FutureResult<(), FlowyError>;
+  // used for add or remove recent views, like history
+  #[event(input = "UpdateRecentViewPayloadPB")]
+  UpdateRecentViews = 37,
 
-    // View
-    fn create_view(&self, token: &str, params: CreateViewParams) -> FutureResult<View, FlowyError>;
+  #[event(input = "GetWorkspaceViewPB", output = "RepeatedViewPB")]
+  ReadPrivateViews = 39,
 
-    fn read_view(&self, token: &str, params: ViewId) -> FutureResult<Option<View>, FlowyError>;
+  /// Return a list of views of the current workspace.
+  /// Only the first level of child views are included.
+  #[event(output = "RepeatedViewPB")]
+  ReadCurrentWorkspaceViews = 40,
 
-    fn delete_view(&self, token: &str, params: RepeatedViewId) -> FutureResult<(), FlowyError>;
+  #[event(input = "UpdateViewVisibilityStatusPayloadPB")]
+  UpdateViewVisibilityStatus = 41,
 
-    fn update_view(&self, token: &str, params: UpdateViewParams) -> FutureResult<(), FlowyError>;
+  /// Return the ancestors of the view
+  #[event(input = "ViewIdPB", output = "RepeatedViewPB")]
+  GetViewAncestors = 42,
 
-    // App
-    fn create_app(&self, token: &str, params: CreateAppParams) -> FutureResult<App, FlowyError>;
+  #[event(input = "PublishViewParamsPB")]
+  PublishView = 43,
 
-    fn read_app(&self, token: &str, params: AppId) -> FutureResult<Option<App>, FlowyError>;
+  #[event(input = "ViewIdPB", output = "PublishInfoResponsePB")]
+  GetPublishInfo = 44,
 
-    fn update_app(&self, token: &str, params: UpdateAppParams) -> FutureResult<(), FlowyError>;
+  #[event(output = "PublishNamespacePB")]
+  GetPublishNamespace = 45,
 
-    fn delete_app(&self, token: &str, params: AppId) -> FutureResult<(), FlowyError>;
+  #[event(input = "SetPublishNamespacePayloadPB")]
+  SetPublishNamespace = 46,
 
-    // Trash
-    fn create_trash(&self, token: &str, params: RepeatedTrashId) -> FutureResult<(), FlowyError>;
+  #[event(input = "UnpublishViewsPayloadPB")]
+  UnpublishViews = 47,
 
-    fn delete_trash(&self, token: &str, params: RepeatedTrashId) -> FutureResult<(), FlowyError>;
+  #[event(input = "ImportZipPB")]
+  ImportZipFile = 48,
 
-    fn read_trash(&self, token: &str) -> FutureResult<RepeatedTrash, FlowyError>;
+  #[event(output = "RepeatedPublishInfoViewPB")]
+  ListPublishedViews = 49,
+
+  #[event(output = "PublishInfoResponsePB")]
+  GetDefaultPublishInfo = 50,
+
+  #[event(input = "ViewIdPB")]
+  SetDefaultPublishView = 51,
+
+  #[event(input = "SetPublishNamePB")]
+  SetPublishName = 52,
+
+  #[event()]
+  RemoveDefaultPublishView = 53,
+
+  #[event(input = "ViewIdPB")]
+  LockView = 54,
+
+  #[event(input = "ViewIdPB")]
+  UnlockView = 55,
 }
